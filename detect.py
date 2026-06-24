@@ -18,14 +18,11 @@ except ImportError:
 
 def check_fall_status(keypoints):
     """
-    Xác định trạng thái ngã và tính toán độ tin cậy của quyết định.
+    Xác định trạng thái ngã và tính toán độ tin cậy dựa trên Góc nghiêng cơ thể (Nâng cấp 1).
     Trả về: (status, confidence)
     - status: 'Fallen' hoặc 'Standing'
-    - confidence: giá trị float từ 0.0 đến 1.0 (ví dụ 0.85 tương đương 85%)
+    - confidence: giá trị float từ 0.0 đến 1.0
     """
-    # Các khớp xương chính được dùng trong quyết định:
-    # 0: nose (đầu), 11: left_hip, 12: right_hip, 15: left_ankle, 16: right_ankle
-
     def get_pt_conf(idx):
         if idx >= len(keypoints):
             return np.array([0.0, 0.0]), 0.0
@@ -33,54 +30,83 @@ def check_fall_status(keypoints):
         conf = keypoints[idx][2] if len(keypoints[idx]) > 2 else 1.0
         return pt, conf
 
+    # Lấy thông tin các khớp chính tham gia vào tính toán góc nghiêng
     nose, nose_conf = get_pt_conf(0)
+    l_sh, l_sh_conf = get_pt_conf(5)
+    r_sh, r_sh_conf = get_pt_conf(6)
     l_hip, l_hip_conf = get_pt_conf(11)
     r_hip, r_hip_conf = get_pt_conf(12)
     l_ankle, l_ankle_conf = get_pt_conf(15)
     r_ankle, r_ankle_conf = get_pt_conf(16)
 
-    # 1. Tính toán độ tin cậy phát hiện khớp xương trung bình của mô hình YOLO
-    keypoint_conf = (nose_conf + l_hip_conf + r_hip_conf + l_ankle_conf + r_ankle_conf) / 5.0
-
-    # 2. Tính toán độ tin cậy hình học (Geometric Margin) dựa trên khoảng cách
-    is_fall_detected = False
-    max_fall_margin = 0.0
-
-    # Điều kiện 1: Đầu thấp hơn hông (nose Y > hip Y)
-    head_hip_diff_l = nose[1] - l_hip[1]
-    head_hip_diff_r = nose[1] - r_hip[1]
-    
-    # Điều kiện 2: Hông thấp hơn cổ chân (hip Y > ankle Y)
-    hip_ankle_diff_l = l_hip[1] - l_ankle[1]
-    hip_ankle_diff_r = r_hip[1] - r_ankle[1]
-
-    # Tìm biên độ lớn nhất chứng minh hành vi ngã
-    if head_hip_diff_l > 0 and head_hip_diff_r > 0:
-        is_fall_detected = True
-        max_fall_margin = max(max_fall_margin, (head_hip_diff_l + head_hip_diff_r) / 2.0)
-        
-    if hip_ankle_diff_l > 0 or hip_ankle_diff_r > 0:
-        is_fall_detected = True
-        max_fall_margin = max(max_fall_margin, max(hip_ankle_diff_l, hip_ankle_diff_r))
-
-    # Quy đổi biên độ hình học thành xác suất/độ tin cậy
-    if is_fall_detected:
-        # Nếu biên độ ngã lớn (ví dụ > 100 pixels), độ tin cậy hình học sẽ tiệm cận 1.0
-        geom_conf = min(1.0, 0.5 + (max_fall_margin / 100.0) * 0.5)
-        status = 'Fallen'
+    # 1. Tính toán trung điểm vai (Shoulder Center) làm điểm ngực/trên
+    if l_sh_conf > 0.3 and r_sh_conf > 0.3:
+        sh_mid = (l_sh + r_sh) / 2.0
+        sh_conf = (l_sh_conf + r_sh_conf) / 2.0
+    elif l_sh_conf > 0.3:
+        sh_mid = l_sh
+        sh_conf = l_sh_conf
+    elif r_sh_conf > 0.3:
+        sh_mid = r_sh
+        sh_conf = r_sh_conf
     else:
-        # Nếu đứng, độ tin cậy đứng dựa trên việc đầu ở cao hơn hông bao nhiêu
-        standing_margin_1 = min(l_hip[1] - nose[1], r_hip[1] - nose[1])
-        standing_margin_2 = min(l_ankle[1] - l_hip[1], r_ankle[1] - r_hip[1])
-        min_standing_margin = min(standing_margin_1, standing_margin_2)
-        
-        geom_conf = min(1.0, 0.5 + (max(0.0, min_standing_margin) / 100.0) * 0.5)
-        status = 'Standing'
+        sh_mid = nose
+        sh_conf = nose_conf
 
-    # Kết hợp độ tin cậy nhận diện mô hình và độ tin cậy tư thế hình học
-    final_conf = keypoint_conf * geom_conf
-    final_conf = max(0.1, min(1.0, final_conf)) # Đảm bảo nằm trong khoảng [0.1, 1.0]
-    
+    # 2. Tính toán trung điểm hông (Hip Center) làm điểm trọng tâm dưới
+    if l_hip_conf > 0.3 and r_hip_conf > 0.3:
+        hip_mid = (l_hip + r_hip) / 2.0
+        hip_conf = (l_hip_conf + r_hip_conf) / 2.0
+    elif l_hip_conf > 0.3:
+        hip_mid = l_hip
+        hip_conf = l_hip_conf
+    elif r_hip_conf > 0.3:
+        hip_mid = r_hip
+        hip_conf = r_hip_conf
+    else:
+        # Fallback: nếu không phát hiện được hông, dùng trung điểm cổ chân hoặc mũi làm mốc dự phòng
+        if l_ankle_conf > 0.3 or r_ankle_conf > 0.3:
+            hip_mid = (l_ankle + r_ankle) / 2.0
+            hip_conf = 0.2
+        else:
+            hip_mid = nose
+            hip_conf = 0.1
+
+    # Trung bình độ tin cậy phát hiện khớp của mô hình YOLO
+    model_conf = (sh_conf + hip_conf) / 2.0
+
+    # 3. Tính toán góc nghiêng cơ thể so với phương thẳng đứng
+    # Vector trục thân người hướng từ Hông lên Vai
+    u = sh_mid - hip_mid
+    # Trục thẳng đứng hướng lên trên (Trong OpenCV, Y tăng từ trên xuống dưới, nên hướng lên là Y âm, tức là (0, -1))
+    v = np.array([0, -1])
+
+    norm_u = np.linalg.norm(u)
+    norm_v = np.linalg.norm(v)
+
+    if norm_u > 0 and norm_v > 0:
+        cos_theta = np.dot(u, v) / (norm_u * norm_v)
+        # Giới hạn cos_theta trong khoảng [-1.0, 1.0] để tránh lỗi lượng giác arccos
+        angle_rad = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+        angle_deg = np.degrees(angle_rad)
+    else:
+        angle_deg = 0.0
+
+    # 4. Xác định trạng thái dựa trên ngưỡng 60 độ
+    threshold_angle = 60.0
+    if angle_deg > threshold_angle:
+        status = 'Fallen'
+        # Độ tin cậy hình học tăng dần khi góc nghiêng cơ thể càng sát phương nằm ngang (90 độ)
+        geom_conf = min(1.0, 0.5 + ((angle_deg - threshold_angle) / (90.0 - threshold_angle)) * 0.5)
+    else:
+        status = 'Standing'
+        # Độ tin cậy đứng tăng khi cơ thể thẳng đứng hơn (góc nghiêng tiến dần về 0 độ)
+        geom_conf = min(1.0, 0.5 + ((threshold_angle - angle_deg) / threshold_angle) * 0.5)
+
+    # Kết hợp độ tin cậy phát hiện của YOLO và cấu trúc tư thế cơ thể
+    final_conf = model_conf * geom_conf
+    final_conf = max(0.1, min(1.0, final_conf))
+
     return status, final_conf
 
 def draw_skeleton(frame, keypoints, confidence_threshold=0.5):
@@ -131,8 +157,17 @@ def draw_skeleton(frame, keypoints, confidence_threshold=0.5):
             cv2.circle(frame, (x, y), 4, (0, 0, 255), -1)
 
 def main():
-    video_path = 'test.mp4'
-    output_path = 'posees.mp4'
+    # Kiểm tra đường dẫn video đầu vào mới
+    if os.path.exists('video_test/test1.mp4'):
+        video_path = 'video_test/test1.mp4'
+    else:
+        video_path = 'test.mp4'
+        
+    # Đảm bảo thư mục kết quả tồn tại
+    if not os.path.exists('video_result'):
+        os.makedirs('video_result')
+        
+    output_path = 'video_result/posees.mp4'
     model_name = 'yolov8n-pose.pt'  # Sử dụng model nano để tải và chạy nhanh
 
     if not os.path.exists(video_path):
@@ -173,7 +208,7 @@ def main():
         results = model.predict(frame, verbose=False)
 
         boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-        keypoints_data = results[0].keypoints.data
+        keypoints_data = results[0].keypoints.data.cpu().numpy()
 
         statuses = []
         confidences = []
@@ -181,7 +216,7 @@ def main():
         # Xử lý trạng thái và vẽ khung xương cho từng người
         for i, keypoints in enumerate(keypoints_data):
             if len(keypoints) > 0:
-                # 1. Tính toán trạng thái đứng/ngã kèm độ tin cậy
+                # 1. Tính toán trạng thái đứng/ngã dựa trên góc nghiêng cơ thể (Nâng cấp 1)
                 status, confidence = check_fall_status(keypoints)
                 statuses.append(status)
                 confidences.append(confidence)
