@@ -171,3 +171,29 @@ Gửi cảnh báo khẩn cấp có hình ảnh hiện trường trực tiếp t�
             print("Gửi cảnh báo thất bại:", response.text)
     ```
 4.  **Tích hợp vào luồng xử lý:** Khi bộ lọc thời gian ở **Nâng cấp 2** xác nhận ngã thành công, gọi lệnh `cv2.imwrite('alert.jpg', frame)` để lưu ảnh tạm, sau đó gọi hàm `send_telegram_alert('alert.jpg')` để báo động.
+
+
+## Thu thập data
+• Bước 1: Thu thập tập dữ liệu ngã (Kaggle/URFD/Le2i):
+  Tải các video người ngã và đi lại bình thường từ Kaggle hoặc các dataset nghiên cứu (như URFD).
+  • Bước 2: Trích xuất đặc trưng (Feature Extraction):
+  Cho video chạy qua YOLOv8-pose pre-trained để xuất ra tọa độ 17 khớp xương của từng frame. Tính toán các đặc trưng hình học đơn giản như: góc
+  thân người, tỷ lệ khung bao, khoảng cách từ đầu đến cổ chân, vận tốc hông.
+  • Bước 3: Tạo Dataset bảng (Tabular Dataset):
+  Lưu các đặc trưng này vào một file CSV với nhãn nhị phân:  1  (Ngã) hoặc  0  (Bình thường).
+  • Bước 4: Huấn luyện một mô hình Machine Learning nhỏ (SVM hoặc Random Forest):
+  Sử dụng thư viện  scikit-learn  trong Python để train một mô hình SVM (Support Vector Machine) hoặc Random Forest trên file CSV này.
+  • Bước 5: Chạy thực tế:
+  Trong luồng xử lý chính: YOLOv8-pose trích xuất tọa độ khớp → Đưa tọa độ khớp vào mô hình SVM → Mô hình SVM trả về xác suất ngã chỉ trong <1
+  ms.
+
+tải khoảng bao nhiêu video
+• Số lượng đề xuất: Bạn chỉ cần khoảng 50 đến 100 video clip ngắn (mỗi clip dài từ 5 - 10 giây).
+      • Bộ dữ liệu URFD (University of Rzeszow Fall Detection): Chỉ gồm 70 video (30 cú ngã và 40 hoạt động hàng ngày như đi lại, cúi người,
+      ngồi xuống).
+      • Bộ dữ liệu Le2i Fall Detection: Gồm 191 video quay ở nhiều bối cảnh nhà ở và văn phòng.
+
+-----------------------------------
+tại sao lại có cả machine learning (SVM/Random Forest), nó bổ trợ cho deep learing như nào ? 
+  • Deep Learning giúp ta biến Ảnh thô (Không cấu trúc) thành Tọa độ số (Có cấu trúc).
+  • Machine Learning giúp ta biến Tọa độ số thành Quyết định Cảnh báo Ngã.
