@@ -1,0 +1,23 @@
+name: yolo_fall
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - pip
+
+  - pip:
+      - ultralytics==8.4.89
+      - opencv-python==5.0.0.93
+      - opencv-contrib-python==5.0.0.93
+      - numpy==2.4.6
+      - pandas==3.0.3
+      - scipy==1.17.1
+      - matplotlib==3.11.0
+      - PyYAML==6.0.3
+      - requests==2.34.2
+      - tqdm==4.68.3
+      - cvzone==2.0.0
