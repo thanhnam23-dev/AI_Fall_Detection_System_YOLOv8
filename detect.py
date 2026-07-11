@@ -16,9 +16,10 @@ except ImportError:
     print("Error: 'cvzone' library is not installed. Please run: pip install cvzone")
     sys.exit(1)
 
-def check_fall_status(keypoints):
+def check_fall_status(keypoints, bbox=None):
     """
-    Xác định trạng thái ngã và tính toán độ tin cậy dựa trên Góc nghiêng cơ thể (Nâng cấp 1).
+    Xác định trạng thái ngã và tính toán độ tin cậy dựa trên Góc nghiêng cơ thể (Nâng cấp 1)
+    kết hợp với Aspect Ratio của Bounding Box làm cứu cánh khi khớp bị khuất/nhiễu.
     Trả về: (status, confidence)
     - status: 'Fallen' hoặc 'Standing'
     - confidence: giá trị float từ 0.0 đến 1.0
@@ -103,6 +104,24 @@ def check_fall_status(keypoints):
         # Độ tin cậy đứng tăng khi cơ thể thẳng đứng hơn (góc nghiêng tiến dần về 0 độ)
         geom_conf = min(1.0, 0.5 + ((threshold_angle - angle_deg) / threshold_angle) * 0.5)
 
+    # 5. Bổ trợ bằng Aspect Ratio của Bounding Box (cực kỳ hữu hiệu khi khớp bị khuất hoặc nằm sàn)
+    if bbox is not None:
+        x1, y1, x2, y2 = bbox
+        w = x2 - x1
+        h = y2 - y1
+        if h > 0:
+            aspect_ratio = w / h
+            # Trường hợp A: Hộp bao cực kỳ dẹt ngang (Aspect Ratio > 1.25) -> Hầu như chắc chắn đang nằm/ngã
+            if aspect_ratio > 1.25:
+                status = 'Fallen'
+                geom_conf = min(1.0, 0.7 + (aspect_ratio - 1.25) * 0.2)
+                model_conf = max(model_conf, 0.5)
+            # Trường hợp B: Khớp bị nhiễu (confidence thấp) nhưng hộp bao nằm ngang nhẹ (Aspect Ratio > 1.1)
+            elif (sh_conf < 0.35 or hip_conf < 0.35 or model_conf < 0.35) and aspect_ratio > 1.1:
+                status = 'Fallen'
+                geom_conf = min(1.0, 0.6 + (aspect_ratio - 1.1) * 0.3)
+                model_conf = max(model_conf, 0.5)
+
     # Kết hợp độ tin cậy phát hiện của YOLO và cấu trúc tư thế cơ thể
     final_conf = model_conf * geom_conf
     final_conf = max(0.1, min(1.0, final_conf))
@@ -158,16 +177,16 @@ def draw_skeleton(frame, keypoints, confidence_threshold=0.5):
 
 def main():
     # Kiểm tra đường dẫn video đầu vào mới
-    if os.path.exists('video_test/test1.mp4'):
-        video_path = 'video_test/test1.mp4'
+    if os.path.exists('video_test/test2.mp4'):
+        video_path = 'video_test/test2.mp4'
     else:
-        video_path = 'test.mp4'
+        video_path = 'test2.mp4'
         
     # Đảm bảo thư mục kết quả tồn tại
     if not os.path.exists('video_result'):
         os.makedirs('video_result')
         
-    output_path = 'video_result/posees.mp4'
+    output_path = 'video_result/posees2.mp4'
     model_name = 'yolov8n-pose.pt'  # Sử dụng model nano để tải và chạy nhanh
 
     if not os.path.exists(video_path):
@@ -177,7 +196,21 @@ def main():
     print(f"Đang tải mô hình YOLOv8-pose: {model_name}...")
     model = YOLO(model_name)
 
-    print(f"Đang mở video: {video_path}...")
+    # Cấu hình bộ lọc thời gian chống báo giả (Nâng cấp 2)
+    # Ví dụ với video 30 FPS, threshold = 30 tương đương duy trì trạng thái ngã 1 giây.
+    FALL_FRAME_THRESHOLD = 30
+    
+    # Sử dụng Centroid Tracker tự thiết kế để triệt tiêu tình trạng nhảy ID khi ngã
+    # track_db = { track_id: {'centroid': (x, y), 'fall_counter': int, 'lost_frames': int} }
+    track_db = {}
+    next_track_id = 1
+    MAX_LOST_FRAMES = 30
+
+    frame_count = 0
+    show_window = True
+
+    print("Bắt đầu xử lý video. Nhấn 'q' để dừng sớm...")
+
     cap = cv2.VideoCapture(video_path)
 
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -191,11 +224,6 @@ def main():
     fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
     out = cv2.VideoWriter(output_path, fourcc, fps, (output_width, output_height))
 
-    frame_count = 0
-    show_window = True
-
-    print("Bắt đầu xử lý video. Nhấn 'q' để dừng sớm...")
-
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -204,11 +232,61 @@ def main():
         frame_count += 1
         frame = cv2.resize(frame, (output_width, output_height))
 
-        # Nhận diện pose
-        results = model.predict(frame, verbose=False)
+        # Nhận diện pose với conf thấp và iou chặt để tránh duplicate box và mất box khi nằm
+        results = model.predict(frame, conf=0.25, iou=0.35, verbose=False)
 
         boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
         keypoints_data = results[0].keypoints.data.cpu().numpy()
+
+        # 1. Tính toán Centroid cho các box phát hiện trong frame hiện tại
+        current_centroids = []
+        for box in boxes:
+            x1, y1, x2, y2 = box
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            current_centroids.append((cx, cy))
+
+        # 2. Khớp các Centroid hiện tại với track_db dựa trên khoảng cách hình học
+        assigned_ids = [None] * len(boxes)
+        used_db_ids = set()
+
+        for idx, (cx, cy) in enumerate(current_centroids):
+            min_dist = float('inf')
+            matched_id = None
+            for db_id, info in track_db.items():
+                if db_id in used_db_ids:
+                    continue
+                dcx, dcy = info['centroid']
+                dist = np.sqrt((cx - dcx)**2 + (cy - dcy)**2)
+                if dist < min_dist:
+                    min_dist = dist
+                    matched_id = db_id
+
+            # Ngưỡng khoảng cách tối đa giữa 2 frame liên tiếp (ví dụ 180 pixel)
+            if matched_id is not None and min_dist < 180:
+                assigned_ids[idx] = matched_id
+                used_db_ids.add(matched_id)
+                # Cập nhật vị trí mới và reset frame bị mất dấu
+                track_db[matched_id]['centroid'] = (cx, cy)
+                track_db[matched_id]['lost_frames'] = 0
+            else:
+                # Tạo ID mới nếu không khớp được với đối tượng cũ nào
+                new_id = next_track_id
+                next_track_id += 1
+                track_db[new_id] = {
+                    'centroid': (cx, cy),
+                    'fall_counter': 0,
+                    'lost_frames': 0
+                }
+                assigned_ids[idx] = new_id
+                used_db_ids.add(new_id)
+
+        # 3. Cập nhật lost_frames cho các ID không xuất hiện ở frame này
+        for db_id in list(track_db.keys()):
+            if db_id not in used_db_ids:
+                track_db[db_id]['lost_frames'] += 1
+                if track_db[db_id]['lost_frames'] > MAX_LOST_FRAMES:
+                    del track_db[db_id]
 
         statuses = []
         confidences = []
@@ -216,10 +294,34 @@ def main():
         # Xử lý trạng thái và vẽ khung xương cho từng người
         for i, keypoints in enumerate(keypoints_data):
             if len(keypoints) > 0:
-                # 1. Tính toán trạng thái đứng/ngã dựa trên góc nghiêng cơ thể (Nâng cấp 1)
-                status, confidence = check_fall_status(keypoints)
-                statuses.append(status)
+                # Lấy Bounding Box tương ứng để truyền vào hàm tính toán trạng thái
+                bbox = boxes[i] if i < len(boxes) else None
+                # Tính toán trạng thái đứng/ngã dựa trên góc nghiêng cơ thể và Aspect Ratio (Nâng cấp 1)
+                status, confidence = check_fall_status(keypoints, bbox=bbox)
                 confidences.append(confidence)
+
+                # Lấy ID theo dõi từ Centroid Tracker của người này
+                track_id = assigned_ids[i] if i < len(assigned_ids) else None
+
+                if track_id is not None and track_id in track_db:
+                    # Nếu phát hiện trạng thái ngã (Fallen)
+                    if status == 'Fallen':
+                        track_db[track_id]['fall_counter'] += 1
+                    else:
+                        track_db[track_id]['fall_counter'] = 0  # Reset ngay lập tức nếu đứng dậy
+
+                    current_count = track_db[track_id]['fall_counter']
+                    # Xác định trạng thái cuối cùng dựa trên bộ lọc thời gian (Nâng cấp 2)
+                    if current_count >= FALL_FRAME_THRESHOLD:
+                        confirmed_status = 'Fallen (Confirmed)'
+                    elif current_count > 0:
+                        confirmed_status = f'Fallen (Pending {current_count}/{FALL_FRAME_THRESHOLD})'
+                    else:
+                        confirmed_status = 'Standing'
+                else:
+                    confirmed_status = status
+
+                statuses.append(confirmed_status)
 
                 # 2. Vẽ khung xương COCO
                 draw_skeleton(frame, keypoints, confidence_threshold=0.5)
@@ -233,13 +335,18 @@ def main():
             status = statuses[i]
             conf_val = confidences[i]
             
-            # Chọn màu dựa trên trạng thái
-            color = (0, 0, 255) if status == 'Fallen' else (0, 255, 0)
+            # Chọn màu dựa trên trạng thái xác nhận
+            if 'Confirmed' in status:
+                color = (0, 0, 255)       # Đỏ cho ngã đã xác nhận
+            elif 'Pending' in status:
+                color = (0, 165, 255)     # Cam/Vàng cho ngã chờ xác nhận
+            else:
+                color = (0, 255, 0)       # Xanh lá cho đứng bình thường
             
             # Vẽ hộp bao quanh
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             
-            # Vẽ văn bản trạng thái: VD "Fallen 92%" hoặc "Standing 85%"
+            # Vẽ văn bản trạng thái: VD "Fallen (Confirmed) 92%" hoặc "Fallen (Pending 12/30) 85%"
             display_text = f"{status} {int(conf_val * 100)}%"
             cvzone.putTextRect(
                 frame, display_text, (x1, y2 - 10),

@@ -1,1 +1,4 @@
 conda activate yolo_fall
+
+# định dạng sang mp4
+yt-dlp -f "mp4" -o "video_test/test_youtube.mp4" "https://www.youtube.com/watch?v=9f49bAbEYv8"

@@ -8,20 +8,20 @@ def convert_video(input_path, output_path=None):
     Chuyển đổi codec của một video bất kỳ sang H.264 sử dụng bộ mã hóa libopenh264 của ffmpeg.
     """
     if not os.path.exists(input_path):
-        print(f"Error: Không tìm thấy file đầu vào '{input_path}'")
+        print(f"Error: Input file not found '{input_path}'")
         return False
         
     if not output_path:
         base, ext = os.path.splitext(input_path)
         output_path = f"{base}_h264{ext}"
         
-    print(f"Đang chuyển đổi: '{input_path}' -> '{output_path}'...")
+    print(f"Converting: '{input_path}' -> '{output_path}'...")
     
-    # Sử dụng libopenh264 vì đây là encoder tương thích nhất trên hệ thống của bạn
+    # Sử dụng libx264 vì đây là encoder tiêu chuẩn và tương thích tốt nhất trên hệ thống của bạn
     cmd = [
         'ffmpeg', '-y', 
         '-i', input_path, 
-        '-vcodec', 'libopenh264', 
+        '-vcodec', 'libx264', 
         '-f', 'mp4', 
         output_path
     ]
@@ -30,14 +30,14 @@ def convert_video(input_path, output_path=None):
         # Chạy lệnh ffmpeg và theo dõi kết quả
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
-            print(f"Chuyển đổi thành công! File kết quả lưu tại: '{output_path}'")
+            print(f"Conversion successful! Output saved at: '{output_path}'")
             return True
         else:
-            print("Error: Lỗi xảy ra trong quá trình chạy ffmpeg:")
+            print("Error occurred while running ffmpeg:")
             print(result.stderr)
             return False
     except FileNotFoundError:
-        print("Error: Không tìm thấy lệnh 'ffmpeg' trên hệ thống. Hãy cài đặt ffmpeg bằng lệnh: sudo apt install ffmpeg")
+        print("Error: 'ffmpeg' command not found on the system. Please install ffmpeg.")
         return False
 
 if __name__ == '__main__':
