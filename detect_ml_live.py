@@ -10,18 +10,19 @@ import cvzone
 from ultralytics import YOLO
 
 # 1. Khởi chạy mô hình YOLO
+YOLO_PATH = "models/yolov8n-pose.pt" if os.path.exists("models/yolov8n-pose.pt") else "yolov8n-pose.pt"
 try:
-    model = YOLO("yolov8n-pose.pt")
+    model = YOLO(YOLO_PATH)
 except Exception as e:
     print(f"Error loading YOLO: {e}")
     sys.exit(1)
 
 # 2. Tải mô hình Học máy SVM và Scaler
-MODEL_PATH = "S:/AI_Fall_Detection_System_YOLOv8/fall_classifier.pkl"
-SCALER_PATH = "S:/AI_Fall_Detection_System_YOLOv8/scaler.pkl"
+MODEL_PATH = "models/fall_classifier.pkl" if os.path.exists("models/fall_classifier.pkl") else "fall_classifier.pkl"
+SCALER_PATH = "models/scaler.pkl" if os.path.exists("models/scaler.pkl") else "scaler.pkl"
 
 if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
-    print("Error: Không tìm thấy file mô hình SVM. Vui lòng chạy train_classifier.py trước!")
+    print("Error: Không tìm thấy file mô hình SVM trong 'models/'. Vui lòng chạy train_classifier.py trước!")
     sys.exit(1)
 
 with open(MODEL_PATH, 'rb') as f:

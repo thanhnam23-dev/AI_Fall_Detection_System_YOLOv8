@@ -1,0 +1,53 @@
+================================================================================
+          DANH SÁCH LỖI, TRƯỜNG HỢP NGOẠI LỆ & GIẢI PHÁP HỆ THỐNG
+                         AI FALL DETECTION YOLOV8
+================================================================================
+
+--------------------------------------------------------------------------------
+PHẦN 1: CÁC LỖI THỰC TẾ ĐÃ GẶP & ĐÃ XỬ LÝ THÀNH CÔNG TRONG CODE
+--------------------------------------------------------------------------------
+
+[LỖI 1] ĐỨNG QUÁ GẦN CAMERA LAPTOP -> BỊ BÁO NHẦM LÀ "FALLEN"
+  - Nguyên nhân: Người đứng sát camera làm chân và hông bị vọt ra ngoài khung hình (out-of-frame truncation). YOLOv8 chỉ nhận diện được nửa thân trên làm Bounding Box bị dẹt ngang (width > height), kích hoạt nhầm điều kiện Aspect Ratio cứu cánh.
+  - Giải pháp đã cài: Lọc đứt khung hình mép dưới (Out-of-Frame Edge Filter).
+    Code kiểm tra nếu y2 >= frame_height - 15px và bị thiếu/mất mốc hông/chân -> Ép trạng thái về "Standing".
+
+[LỖI 2] KHOM NGƯỜI / CÚI LƯNG NHẶT ĐỒ -> BỊ BÁO NHẦM LÀ "FALLEN"
+  - Nguyên nhân: Khi cúi gập lưng 90 độ, trục thân người nằm ngang và Bounding Box dẹt lại. Trên ảnh tĩnh 2D, tư thế cúi lưng trông giống 100% người nằm ngã dưới sàn.
+  - Giải pháp đã cài: Kiểm tra vị trí Chân so với Hông (Foot Grounding Check).
+    Code kiểm tra chênh lệch tọa độ Y giữa Hông (hip_y) và Cổ chân/Đầu gối (feet_y). Nếu feet_y > hip_y + 0.18*h (chân vẫn nằm ở phía bên dưới thấp hơn hông rõ rệt) -> Đã xác nhận là đứng trụ cúi người -> Ép trạng thái về "Standing".
+
+[LỖI 3] NHẢY ID ĐỐI TƯỢNG (ID SWITCH) KHI ĐANG NGÃ
+  - Nguyên nhân: Bộ theo dõi mặc định của YOLOv8 (model.track) bị nhầm lẫn ID khi tư thế ngã thay đổi hình dạng và vận tốc đột ngột, làm reset bộ đếm khung hình liên tục và không bao giờ đạt tới trạng thái "Fallen (Confirmed)".
+  - Giải pháp đã cài: Tự thiết kế Centroid Tracker riêng.
+    Tính khoảng cách Euclid giữa tâm Bounding Box giữa 2 frame liên tiếp với ngưỡng 180px. Bộ theo dõi này giữ vững ID cố định trong suốt quá trình người ngã xuống sàn.
+
+[LỖI 4] GIẬT LAG & TÍCH LŨY ĐỘ TRỄ KHI CHẠY CAMERA TRỰC TIẾP
+  - Nguyên nhân: Chạy đơn luồng (Single-thread) làm tốc độ xử lý AI (40-60ms/frame) chậm hơn tốc độ gửi ảnh của camera (30 FPS ~ 33ms/frame). Các frame cũ bị ứ đọng trong bộ đệm OpenCV khiến video hiển thị bị chậm dần so với thời gian thực.
+  - Giải pháp đã cài: Nâng cấp 3 (Multi-threading WebcamStream).
+    Đọc camera ngầm trên một Thread độc lập riêng biệt, luôn giữ duy nhất frame thời gian thực mới nhất và giải phóng các frame cũ.
+
+
+--------------------------------------------------------------------------------
+PHẦN 2: CÁC LỖI TỒN ĐỌNG KHÁCH QUAN CỦA MÔ HÌNH 2D & HƯỚNG PHÁT TRIỂN DỰ ÁN
+--------------------------------------------------------------------------------
+
+[LỖI 5] NẰM NGHỈ / NẰM NGỦ TRÊN GIƯỜNG, SOFA HOẶC THẢM CAO
+  - Nguyên nhân: Camera 2D thông thường không đo được độ sâu (Depth). Tư thế nằm nghỉ trên sofa/giường có tọa độ khớp xương và tỷ lệ dẹt khung hình giống 100% với nằm ngã dưới sàn nhà.
+  - Hướng khắc phục đồ án: Khoanh vùng ROI (Region of Interest) cho vị trí giường/sofa để bỏ qua cảnh báo khi đối tượng nằm trong vùng này.
+
+[LỖI 6] TẬP THỂ DỤC DƯỚI SÀN NHÀ (PLANK, HÍT ĐẤT, YOGA, GẬP BỤNG)
+  - Nguyên nhân: Thân người nằm ngang sát sàn nhà trong thời gian dài. Mô hình SVM tĩnh 1 frame sẽ phân loại đây là tư thế ngã.
+  - Hướng khắc phục đồ án: Nâng cấp lên mô hình chuỗi thời gian (LSTM / GRU / 3D CNN) để phân biệt chuỗi "Đứng -> Rơi tự do nhanh -> Nằm im" với chuỗi "Nằm -> Chuyển động lên xuống định kỳ".
+
+[LỖI 7] BỊ CHE KHUẤT CƠ THỂ BỞI VẬT CẢN (OCCLUSION - BÀN, GHẾ, SOFA)
+  - Nguyên nhân: Người ngã đằng sau bàn làm việc/sofa khiến camera chỉ nhìn thấy nửa đầu hoặc cánh tay. YOLOv8 không trích xuất đủ bộ xương (conf < 0.25) -> Bị bỏ sót không nhận diện được cú ngã (False Negative).
+  - Hướng khắc phục đồ án: Lắp đặt camera ở vị trí góc cao nhìn xuống (Top-Diagonal view) để giảm thiểu điểm mù do nội thất.
+
+[LỖI 8] NHIỀU NGƯỜI ĐI CẮT MẶT / GIAO THOA SÁT NHAU (MULTI-PERSON CROSSOVER)
+  - Nguyên nhân: Centroid Tracker chỉ dựa vào khoảng cách tâm hình học đơn giản. Khi 2 người đi lướt qua nhau sát nách, tâm hình học bị dính vào nhau làm nhảy ID.
+  - Hướng khắc phục đồ án: Nâng cấp lên bộ theo dõi ByteTrack hoặc DeepSORT (kết hợp với đặc trưng hình ảnh/màu sắc áo).
+
+[LỖI 9] ĐIỀU KIỆN ÁNH SÁNG YẾU / QUẦN ÁO TRÙNG MÀU SÀN NHÀ
+  - Nguyên nhân: Tương phản màu sắc quá thấp khiến YOLOv8-pose không nhận diện được đường nét khớp xương -> Hệ thống rơi vào trạng thái Unknown.
+  - Hướng khắc phục đồ án: Sử dụng camera wifi hồng ngoại quay đêm (Infrared Night Vision).

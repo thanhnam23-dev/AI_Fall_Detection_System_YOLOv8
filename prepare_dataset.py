@@ -8,7 +8,8 @@ from tqdm import tqdm
 from ultralytics import YOLO
 
 # 1. Khởi tạo mô hình
-model = YOLO("yolov8n-pose.pt")
+YOLO_PATH = "models/yolov8n-pose.pt" if os.path.exists("models/yolov8n-pose.pt") else "yolov8n-pose.pt"
+model = YOLO(YOLO_PATH)
 
 # Đường dẫn thư mục dữ liệu
 DATA_DIR = "S:/AI_Fall_Detection_System_YOLOv8/data"

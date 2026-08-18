@@ -187,7 +187,7 @@ def main():
         os.makedirs('video_result')
         
     output_path = 'video_result/posees.mp4'
-    model_name = 'yolov8n-pose.pt'  # Sử dụng model nano để tải và chạy nhanh
+    model_name = 'models/yolov8n-pose.pt' if os.path.exists('models/yolov8n-pose.pt') else 'yolov8n-pose.pt'
 
     if not os.path.exists(video_path):
         print(f"Error: Không tìm thấy file video mẫu '{video_path}' trong thư mục hiện tại.")

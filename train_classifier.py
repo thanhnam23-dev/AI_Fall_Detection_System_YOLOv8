@@ -8,9 +8,10 @@ from sklearn.svm import SVC
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 
 # Đường dẫn file dữ liệu đầu vào và kết quả đầu ra
-CSV_PATH = "S:/AI_Fall_Detection_System_YOLOv8/urfd_dataset.csv"
-MODEL_PATH = "S:/AI_Fall_Detection_System_YOLOv8/fall_classifier.pkl"
-SCALER_PATH = "S:/AI_Fall_Detection_System_YOLOv8/scaler.pkl"
+CSV_PATH = "urfd_dataset.csv"
+MODEL_PATH = "models/fall_classifier.pkl"
+SCALER_PATH = "models/scaler.pkl"
+os.makedirs("models", exist_ok=True)
 
 def main():
     if not os.path.exists(CSV_PATH):
