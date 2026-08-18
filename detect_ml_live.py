@@ -3,31 +3,72 @@ import numpy as np
 import os
 import sys
 import pickle
+import threading
+import queue
+import time
 import cvzone
 from ultralytics import YOLO
 
-# Khởi chạy mô hình YOLOv8-pose
+# 1. Khởi chạy mô hình YOLO
 try:
     model = YOLO("yolov8n-pose.pt")
 except Exception as e:
     print(f"Error loading YOLO: {e}")
     sys.exit(1)
 
-# Đường dẫn file mô hình ML và Scaler đã huấn luyện
+# 2. Tải mô hình Học máy SVM và Scaler
 MODEL_PATH = "S:/AI_Fall_Detection_System_YOLOv8/fall_classifier.pkl"
 SCALER_PATH = "S:/AI_Fall_Detection_System_YOLOv8/scaler.pkl"
 
 if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
-    print("Error: Không tìm thấy file mô hình SVM pkl. Vui lòng huấn luyện mô hình trước!")
+    print("Error: Không tìm thấy file mô hình SVM. Vui lòng chạy train_classifier.py trước!")
     sys.exit(1)
 
-# Tải mô hình và bộ chuẩn hóa
 with open(MODEL_PATH, 'rb') as f:
     clf = pickle.load(f)
 with open(SCALER_PATH, 'rb') as f:
     scaler = pickle.load(f)
 
-# Hàm tính góc nghiêng cơ thể phục vụ trích xuất đặc trưng
+# --- LỚP ĐA LUỒNG ĐỌC CAMERA (NÂNG CẤP 3) ---
+class WebcamStream:
+    def __init__(self, src=0):
+        self.stream = cv2.VideoCapture(src)
+        # Giới hạn queue chỉ chứa tối đa 3 frames để giải phóng bộ đệm, luôn giữ frame mới nhất
+        self.q = queue.Queue(maxsize=3)
+        self.stopped = False
+        self.ret = False
+        
+    def start(self):
+        t = threading.Thread(target=self.update, args=())
+        t.daemon = True
+        t.start()
+        return self
+        
+    def update(self):
+        while not self.stopped:
+            ret, frame = self.stream.read()
+            if not ret:
+                self.stopped = True
+                break
+            
+            # Nếu hàng đợi đầy, đẩy bớt frame cũ ra để nhường chỗ cho frame thời gian thực mới nhất
+            if self.q.full():
+                try:
+                    self.q.get_nowait()
+                except queue.Empty:
+                    pass
+            self.q.put(frame)
+            
+    def read(self):
+        if self.q.empty():
+            return None
+        return self.q.get()
+        
+    def stop(self):
+        self.stopped = True
+        self.stream.release()
+
+# Hàm tính góc nghiêng cơ thể
 def calculate_angle(keypoints):
     def get_pt_conf(idx):
         if idx >= len(keypoints):
@@ -72,9 +113,9 @@ def calculate_angle(keypoints):
     return 0.0
 
 def draw_skeleton(frame, keypoints, confidence_threshold=0.5):
-    color_left = (255, 255, 0)    # Cyan
-    color_right = (0, 165, 255)   # Orange
-    color_center = (0, 255, 0)    # Green
+    color_left = (255, 255, 0)
+    color_right = (0, 165, 255)
+    color_center = (0, 255, 0)
     connections = [
         (0, 1, color_left), (0, 2, color_right), 
         (1, 3, color_left), (2, 4, color_right),
@@ -100,7 +141,9 @@ def draw_skeleton(frame, keypoints, confidence_threshold=0.5):
             cv2.circle(frame, (int(pt[0]), int(pt[1])), 4, (0, 0, 255), -1)
 
 # Hàm phụ trợ bổ sung logic Aspect Ratio & Giải pháp chống báo sai (Giải pháp 1 + Giải pháp 2)
-def check_fall_status_fallback(keypoints, bbox=None, frame_height=680):
+def check_fall_status_fallback(keypoints, bbox=None, frame_height=600):
+    # Dùng SVM để dự đoán chính
+    # Trích xuất đặc trưng
     def get_pt_conf(idx):
         if idx >= len(keypoints):
             return np.array([0.0, 0.0]), 0.0
@@ -141,15 +184,22 @@ def check_fall_status_fallback(keypoints, bbox=None, frame_height=680):
     status = 'Fallen' if pred == 1 else 'Standing'
     confidence = pred_proba[pred]
 
+    # =========================================================================
     # GIẢI PHÁP 1: Lọc đối tượng đứng quá gần camera (Out-of-Frame Edge Filter)
+    # =========================================================================
     is_touching_bottom = (y2 >= frame_height - 15)
     is_partially_clipped = is_touching_bottom and (l_hip_conf < 0.35 or r_hip_conf < 0.35 or l_ankle_conf < 0.35 or r_ankle_conf < 0.35)
     if is_partially_clipped or (is_touching_bottom and h > 0.75 * frame_height and aspect_ratio > 0.85):
+        # Đứng quá gần camera nên bị cắt phần thân dưới -> Ép về Standing
         status = 'Standing'
         confidence = max(confidence, 0.85)
 
+    # =========================================================================
     # GIẢI PHÁP 2: Kiểm tra vị trí Chân/Đầu gối so với Hông (Foot Grounding Check)
+    # Phân biệt khom/cúi người nhặt đồ với nằm ngã thực sự dưới sàn
+    # =========================================================================
     if status == 'Fallen':
+        # Tính Y trung bình của Hông
         if l_hip_conf > 0.3 and r_hip_conf > 0.3:
             hip_y = (l_hip[1] + r_hip[1]) / 2.0
         elif l_hip_conf > 0.3:
@@ -159,6 +209,7 @@ def check_fall_status_fallback(keypoints, bbox=None, frame_height=680):
         else:
             hip_y = None
 
+        # Tính Y trung bình của Cổ chân hoặc Đầu gối
         if l_ankle_conf > 0.3 and r_ankle_conf > 0.3:
             feet_y = (l_ankle[1] + r_ankle[1]) / 2.0
         elif l_ankle_conf > 0.3:
@@ -170,11 +221,15 @@ def check_fall_status_fallback(keypoints, bbox=None, frame_height=680):
         else:
             feet_y = None
 
+        # Nếu chân/đầu gối vẫn nằm ở phía dưới thấp hơn hông một khoảng rõ rệt (> 18% chiều cao box)
+        # Trong OpenCV, Y tăng từ trên xuống dưới -> feet_y > hip_y nghĩa là chân đứng ở dưới hông
         if hip_y is not None and feet_y is not None:
             if (feet_y - hip_y) > 0.18 * h:
+                # Đang khom người / cúi lưng nhặt đồ nhưng chân vẫn đứng trụ -> Ép về Standing
                 status = 'Standing'
                 confidence = max(confidence, 0.85)
 
+    # Cứu cánh bằng Aspect Ratio cứng khi người nằm ngang thực sự và không bị chạm mép dưới
     if bbox is not None and aspect_ratio > 1.30 and not is_touching_bottom:
         status = 'Fallen'
         confidence = max(confidence, 0.85)
@@ -182,62 +237,41 @@ def check_fall_status_fallback(keypoints, bbox=None, frame_height=680):
     return status, confidence
 
 def main():
-    # Sử dụng video test2 để kiểm chứng
-    video_path = 'video_test/test2.mp4'
-    if not os.path.exists(video_path):
-        video_path = 'test.mp4'
-
-    if not os.path.exists(video_path):
-        print(f"Error: Không tìm thấy file video mẫu '{video_path}'")
-        return
-
-    # Đường dẫn file đầu ra
-    output_path = 'video_result/posees2_ml.mp4'
+    # Sử dụng camera của laptop (mặc định src=0)
+    print("Đang khởi động luồng đọc camera...")
+    webcam = WebcamStream(src=0).start()
     
-    if not os.path.exists('video_result'):
-        os.makedirs('video_result')
-
-    print(f"Đang mở video: {video_path}...")
-    cap = cv2.VideoCapture(video_path)
-
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0 or np.isnan(fps):
-        fps = 30.0
-    
-    output_width = 1200
-    output_height = 680
-
-    print(f"Đang ghi video kết quả vào '{output_path}'...")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
-    out = cv2.VideoWriter(output_path, fourcc, fps, (output_width, output_height))
+    output_width = 1000
+    output_height = 600
 
     # Cấu hình bộ lọc thời gian chống báo giả (Nâng cấp 2)
     FALL_FRAME_THRESHOLD = 30
-    
-    # Centroid Tracker để ổn định ID
     track_db = {}
     next_track_id = 1
     MAX_LOST_FRAMES = 30
 
-    frame_count = 0
-    show_window = True
+    print("\n==============================================")
+    print("Hệ thống đã sẵn sàng!")
+    print("Nhấn 'q' trực tiếp tại cửa sổ video để THOÁT.")
+    print("==============================================\n")
 
-    print("Bắt đầu xử lý video bằng mô hình Học Máy. Nhấn 'q' để dừng sớm...")
+    # Tính toán FPS hiển thị
+    prev_time = 0
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    while not webcam.stopped:
+        frame = webcam.read()
+        if frame is None:
+            time.sleep(0.005) # Chờ một chút nếu hàng đợi trống
+            continue
 
-        frame_count += 1
         frame = cv2.resize(frame, (output_width, output_height))
 
-        # Nhận diện pose bằng YOLO
+        # Nhận diện pose
         results = model.predict(frame, conf=0.25, iou=0.35, verbose=False)
         boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
         keypoints_data = results[0].keypoints.data.cpu().numpy()
 
-        # 1. Tính toán Centroid cho frame hiện tại
+        # 1. Tính toán Centroid
         current_centroids = []
         for box in boxes:
             x1, y1, x2, y2 = box
@@ -245,7 +279,7 @@ def main():
             cy = (y1 + y2) // 2
             current_centroids.append((cx, cy))
 
-        # 2. Khớp các Centroid với track_db
+        # 2. Khớp các Centroid
         assigned_ids = [None] * len(boxes)
         used_db_ids = set()
 
@@ -287,7 +321,7 @@ def main():
         statuses = []
         confidences = []
 
-        # Xử lý trạng thái dựa trên mô hình SVM
+        # Xử lý trạng thái và vẽ skeleton
         for i, keypoints in enumerate(keypoints_data):
             if len(keypoints) > 0 and i < len(boxes):
                 box = boxes[i]
@@ -317,7 +351,7 @@ def main():
                 statuses.append('Unknown')
                 confidences.append(0.0)
 
-        # Vẽ bounding box
+        # Vẽ bounding box lên màn hình
         for i in range(min(len(boxes), len(statuses))):
             x1, y1, x2, y2 = boxes[i]
             status = statuses[i]
@@ -334,31 +368,30 @@ def main():
             display_text = f"{status} {int(conf_val * 100)}%"
             cvzone.putTextRect(
                 frame, display_text, (x1, y2 - 10),
-                scale=1.8, thickness=2,
+                scale=1.5, thickness=2,
                 colorT=(255, 255, 255), colorR=color,
                 font=cv2.FONT_HERSHEY_PLAIN,
-                offset=10,
+                offset=8,
                 border=0
             )
 
-        out.write(frame)
+        # Tính toán và vẽ FPS thực tế
+        curr_time = time.time()
+        fps_val = 1 / (curr_time - prev_time) if (curr_time - prev_time) > 0 else 30.0
+        prev_time = curr_time
+        cv2.putText(
+            frame, f"FPS: {int(fps_val)}", (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2
+        )
 
-        if show_window:
-            try:
-                cv2.imshow('YOLOv8 Pose & SVM Fall Detection', frame)
-                if cv2.waitKey(1) == ord('q'):
-                    break
-            except cv2.error:
-                show_window = False
-                print("Headless environment detected. Ghi file video...")
+        # Hiển thị trực tiếp lên màn hình
+        cv2.imshow('REAL-TIME Fall Detection (Multi-threaded)', frame)
+        if cv2.waitKey(1) == ord('q'):
+            break
 
-        if frame_count % 30 == 0:
-            print(f"Đã xử lý {frame_count} frames...")
-
-    cap.release()
-    out.release()
+    webcam.stop()
     cv2.destroyAllWindows()
-    print(f"Xử lý hoàn thành! Kết quả lưu tại: '{output_path}'")
+    print("Đã tắt camera và đóng ứng dụng.")
 
 if __name__ == '__main__':
     main()

@@ -177,16 +177,16 @@ def draw_skeleton(frame, keypoints, confidence_threshold=0.5):
 
 def main():
     # Kiểm tra đường dẫn video đầu vào mới
-    if os.path.exists('video_test/test2.mp4'):
-        video_path = 'video_test/test2.mp4'
+    if os.path.exists('video_test/test1.mp4'):
+        video_path = 'video_test/test1.mp4'
     else:
-        video_path = 'test2.mp4'
+        video_path = 'test1.mp4'
         
     # Đảm bảo thư mục kết quả tồn tại
     if not os.path.exists('video_result'):
         os.makedirs('video_result')
         
-    output_path = 'video_result/posees2.mp4'
+    output_path = 'video_result/posees.mp4'
     model_name = 'yolov8n-pose.pt'  # Sử dụng model nano để tải và chạy nhanh
 
     if not os.path.exists(video_path):
