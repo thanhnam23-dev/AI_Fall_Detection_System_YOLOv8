@@ -5,10 +5,11 @@ import config
 from src.stream import WebcamStream
 from src.tracker import CentroidTracker
 from src.detector import FallDetector, draw_skeleton
+from src.services.telegram_service import TelegramService
 
 def main():
     print("=====================================================")
-    print(" 🚨 HỆ THỐNG PHÁT HIỆN NGÃ AI (REAL-TIME LIVE STREAM)")
+    print(" HỆ THỐNG PHÁT HIỆN NGÃ AI (REAL-TIME LIVE STREAM)")
     print(f" Nguồn Camera: {config.CAMERA_SOURCE}")
     print("=====================================================\n")
 
@@ -16,12 +17,13 @@ def main():
     print("Đang khởi động luồng đọc camera đa luồng...")
     webcam = WebcamStream(src=config.CAMERA_SOURCE).start()
     
-    print("Đang khởi tạo mô hình AI & Tracker...")
+    print("Đang khởi tạo mô hình AI, Tracker & Telegram Service...")
     detector = FallDetector()
     tracker = CentroidTracker(
         max_distance=config.TRACKER_MAX_DISTANCE, 
         max_lost_frames=config.MAX_LOST_FRAMES
     )
+    telegram = TelegramService()
 
     print("\nHệ thống đã sẵn sàng! Nhấn 'q' tại cửa sổ video để THOÁT.\n")
     prev_time = time.time()
@@ -61,6 +63,8 @@ def main():
 
                 if fall_count >= config.FALL_FRAME_THRESHOLD:
                     confirmed_status = 'Fallen (Confirmed)'
+                    # Kích hoạt gửi ảnh cảnh báo Telegram
+                    telegram.send_fall_alert(frame, confirmed_status)
                 elif fall_count > 0:
                     confirmed_status = f'Fallen (Pending {fall_count}/{config.FALL_FRAME_THRESHOLD})'
                 else:
