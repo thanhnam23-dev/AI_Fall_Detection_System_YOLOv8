@@ -60,14 +60,23 @@ def main():
         for i, keypoints in enumerate(keypoints_data):
             if len(keypoints) > 0 and i < len(boxes):
                 box = boxes[i]
-                status, confidence = detector.predict_fall_status(
+                track_id = assigned_ids[i]
+                
+                y_hip_norm_estimate = (box[1] + box[3]) / (2.0 * output_height)
+                drop_velocity, had_sudden_drop = tracker.update_hip_position(track_id, y_hip_norm_estimate)
+
+                status, confidence, actual_y_hip_norm = detector.predict_fall_status(
                     keypoints, 
                     bbox=box, 
-                    frame_height=output_height
+                    frame_height=output_height,
+                    had_sudden_drop=had_sudden_drop
                 )
+                
+                if actual_y_hip_norm is not None:
+                    tracker.update_hip_position(track_id, actual_y_hip_norm)
+
                 confidences.append(confidence)
 
-                track_id = assigned_ids[i]
                 is_fallen = (status == 'Fallen')
                 fall_count = tracker.update_fall_counter(track_id, is_fallen)
 

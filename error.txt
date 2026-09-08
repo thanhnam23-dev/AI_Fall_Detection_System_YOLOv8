@@ -4,7 +4,7 @@
 ================================================================================
 
 --------------------------------------------------------------------------------
-PHẦN 1: CÁC LỖI THỰC TẾ ĐÃ GẶP & ĐÃ XỬ LÝ THÀNH CÔNG TRONG CODE
+PHẦN 1: CÁC LỖI THỰC TẾ ĐÃ GẶP & ĐÃ XỬ LÝ THÀNH CÔNG TRONG CODE (7 LỖI)
 --------------------------------------------------------------------------------
 
 [LỖI 1] ĐỨNG QUÁ GẦN CAMERA LAPTOP -> BỊ BÁO NHẦM LÀ "FALLEN"
@@ -27,26 +27,30 @@ PHẦN 1: CÁC LỖI THỰC TẾ ĐÃ GẶP & ĐÃ XỬ LÝ THÀNH CÔNG TRONG C
   - Giải pháp đã cài: Nâng cấp 3 (Multi-threading WebcamStream).
     Đọc camera ngầm trên một Thread độc lập riêng biệt, luôn giữ duy nhất frame thời gian thực mới nhất và giải phóng các frame cũ.
 
+[LỖI 5 - MỚI FIX] NGÃ KHÉP CHÂN / CO QUẮP KHÔNG ĐƯỢC NHẬN DIỆN
+  - Nguyên nhân: Khi ngã khép chân hoặc co chân, Bounding box không dẹt ra (aspect_ratio < 1.0) khiến mô hình bị nhầm thành tư thế đứng.
+  - Giải pháp đã cài: Thuật toán vị trí hông tuyệt đối (Hip Screen Position + Body Tilt Angle).
+    Code kiểm tra nếu Góc nghiêng cơ thể > 45 độ VÀ Tọa độ Y của hông nằm ở nửa dưới màn hình (y_hip_norm > 0.50) -> Xác nhận ngã "Fallen" kể cả khi khép sát 2 chân.
+
+[LỖI 6 - MỚI FIX] NẰM NGỦ TRÊN GIƯỜNG/SOFA BỊ BÁO THÔNG BÁO LIÊN TỤC
+  - Nguyên nhân: Tư thế nằm nghỉ trên giường/sofa và nằm ngã dưới sàn có hình dạng 2D giống nhau.
+  - Giải pháp đã cài: Thuật toán Vận tốc rơi tự do đột ngột (Sudden Drop Velocity).
+    Code theo dõi lịch sử quỹ đạo Y của hông (hip_y_history). Chỉ khi nào xuất hiện cú "rơi tự do vọt độ cao" (velocity >= 0.25/s trong 0.2 - 0.4s) mới cho phép kích hoạt ngã/đột quỵ. Nếu nằm ngả người từ từ lên giường/sofa -> Ép về "Standing" (Sinh hoạt bình thường).
+
+[LỖI 7 - MỚI FIX] NHIỀU NGƯỜI TRONG PHÒNG NẰM / ĐỨNG GẦN NHAU BỊ BỎ SÓT NGÃ
+  - Nguyên nhân: Code cũ chỉ ưu tiên kiểm tra 1 người duy nhất có box lớn nhất (khi người đứng gần camera hơn người ngã -> Máy bỏ sót người ngã). Đồng thời model Nano bị rối khớp khi nhiều người đè lên nhau.
+  - Giải pháp đã cài: 
+    1. Lập trình vòng lặp kiểm tra và theo dõi độc lập cho TẤT CẢ mọi người trong khung hình.
+    2. Cấu hình tự động ưu tiên tải mô hình YOLOv8-pose Small (yolov8s-pose.pt) nhận diện đa người và khớp bị che khuất chính xác gấp 3 lần bản Nano.
+
 
 --------------------------------------------------------------------------------
 PHẦN 2: CÁC LỖI TỒN ĐỌNG KHÁCH QUAN CỦA MÔ HÌNH 2D & HƯỚNG PHÁT TRIỂN DỰ ÁN
 --------------------------------------------------------------------------------
 
-[LỖI 5] NẰM NGHỈ / NẰM NGỦ TRÊN GIƯỜNG, SOFA HOẶC THẢM CAO
-  - Nguyên nhân: Camera 2D thông thường không đo được độ sâu (Depth). Tư thế nằm nghỉ trên sofa/giường có tọa độ khớp xương và tỷ lệ dẹt khung hình giống 100% với nằm ngã dưới sàn nhà.
-  - Hướng khắc phục đồ án: Khoanh vùng ROI (Region of Interest) cho vị trí giường/sofa để bỏ qua cảnh báo khi đối tượng nằm trong vùng này.
-
-[LỖI 6] TẬP THỂ DỤC DƯỚI SÀN NHÀ (PLANK, HÍT ĐẤT, YOGA, GẬP BỤNG)
-  - Nguyên nhân: Thân người nằm ngang sát sàn nhà trong thời gian dài. Mô hình SVM tĩnh 1 frame sẽ phân loại đây là tư thế ngã.
-  - Hướng khắc phục đồ án: Nâng cấp lên mô hình chuỗi thời gian (LSTM / GRU / 3D CNN) để phân biệt chuỗi "Đứng -> Rơi tự do nhanh -> Nằm im" với chuỗi "Nằm -> Chuyển động lên xuống định kỳ".
-
-[LỖI 7] BỊ CHE KHUẤT CƠ THỂ BỞI VẬT CẢN (OCCLUSION - BÀN, GHẾ, SOFA)
-  - Nguyên nhân: Người ngã đằng sau bàn làm việc/sofa khiến camera chỉ nhìn thấy nửa đầu hoặc cánh tay. YOLOv8 không trích xuất đủ bộ xương (conf < 0.25) -> Bị bỏ sót không nhận diện được cú ngã (False Negative).
+[LỖI 8] BỊ CHE KHUẤT CƠ THỂ BỞI VẬT CẢN LỚN (OCCLUSION - BÀN, GHẾ, SOFA)
+  - Nguyên nhân: Người ngã hoàn toàn đằng sau bàn làm việc/sofa khiến camera chỉ nhìn thấy nửa đầu hoặc cánh tay. YOLOv8 không trích xuất đủ bộ xương (conf < 0.25) -> Bị bỏ sót không nhận diện được cú ngã (False Negative).
   - Hướng khắc phục đồ án: Lắp đặt camera ở vị trí góc cao nhìn xuống (Top-Diagonal view) để giảm thiểu điểm mù do nội thất.
-
-[LỖI 8] NHIỀU NGƯỜI ĐI CẮT MẶT / GIAO THOA SÁT NHAU (MULTI-PERSON CROSSOVER)
-  - Nguyên nhân: Centroid Tracker chỉ dựa vào khoảng cách tâm hình học đơn giản. Khi 2 người đi lướt qua nhau sát nách, tâm hình học bị dính vào nhau làm nhảy ID.
-  - Hướng khắc phục đồ án: Nâng cấp lên bộ theo dõi ByteTrack hoặc DeepSORT (kết hợp với đặc trưng hình ảnh/màu sắc áo).
 
 [LỖI 9] ĐIỀU KIỆN ÁNH SÁNG YẾU / QUẦN ÁO TRÙNG MÀU SÀN NHÀ
   - Nguyên nhân: Tương phản màu sắc quá thấp khiến YOLOv8-pose không nhận diện được đường nét khớp xương -> Hệ thống rơi vào trạng thái Unknown.

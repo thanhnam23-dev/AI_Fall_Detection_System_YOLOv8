@@ -82,14 +82,20 @@ def draw_skeleton(frame, keypoints, confidence_threshold=0.5):
 class FallDetector:
     """
     Bộ nhận diện ngã AI kết hợp YOLOv8-pose + SVM Classifier.
-    Tích hợp Giải pháp 1 (Lọc mép màn hình) và Giải pháp 2 (Lọc vị trí chân/hông khi cúi nhặt đồ).
+    Tích hợp các thuật toán nâng cao:
+    - Giải pháp 1: Lọc đối tượng đứng sát camera (Out-of-Frame Edge Filter)
+    - Giải pháp 2: Lọc tư thế cúi nhặt đồ (Foot Grounding Check)
+    - CẢI TIẾN MỚI 1: Nhận diện ngã khép chân/co quắp (Hip Screen Position + Tilt Angle)
+    - CẢI TIẾN MỚI 2: Phân biệt ngã/đột quỵ đột ngột với nằm từ từ lên giường (Sudden Drop Velocity)
     """
     def __init__(self):
-        # 1. Tải YOLOv8-pose
+        # 1. Ưu tiên tải YOLOv8-pose Small (chính xác cao hơn cho nhiều người), fallback về Nano
+        yolo_path = config.YOLO_MODEL_PATH
+        print(f"Đang khởi tạo mô hình YOLOv8-pose từ: '{yolo_path}'...")
         try:
-            self.yolo_model = YOLO(config.YOLO_MODEL_PATH)
+            self.yolo_model = YOLO(yolo_path)
         except Exception as e:
-            print(f"Lỗi tải mô hình YOLO ({config.YOLO_MODEL_PATH}): {e}")
+            print(f"Lỗi tải mô hình YOLO ({yolo_path}): {e}")
             sys.exit(1)
 
         # 2. Tải SVM Classifier & Scaler
@@ -114,8 +120,8 @@ class FallDetector:
         keypoints_data = results[0].keypoints.data.cpu().numpy()
         return boxes, keypoints_data
 
-    def predict_fall_status(self, keypoints, bbox, frame_height=600):
-        """Dự đoán trạng thái tư thế và áp dụng các bộ lọc chống báo nhầm"""
+    def predict_fall_status(self, keypoints, bbox, frame_height=600, had_sudden_drop=False):
+        """Dự đoán trạng thái tư thế và áp dụng các bộ lọc chống báo nhầm nâng cao"""
         def get_pt_conf(idx):
             if idx >= len(keypoints):
                 return np.array([0.0, 0.0]), 0.0
@@ -133,6 +139,18 @@ class FallDetector:
         x1, y1, x2, y2 = bbox
         w = max(1, x2 - x1)
         h = max(1, y2 - y1)
+
+        # Lấy tọa độ Y hông chuẩn hóa theo màn hình
+        if l_hip_conf > 0.3 and r_hip_conf > 0.3:
+            hip_y = (l_hip[1] + r_hip[1]) / 2.0
+        elif l_hip_conf > 0.3:
+            hip_y = l_hip[1]
+        elif r_hip_conf > 0.3:
+            hip_y = r_hip[1]
+        else:
+            hip_y = (y1 + y2) / 2.0
+            
+        y_hip_norm = hip_y / max(1.0, float(frame_height))
         
         # Chuẩn hóa tọa độ 17 khớp xương về khoảng [0, 1] relative với bounding box
         normalized_kpts = []
@@ -161,17 +179,16 @@ class FallDetector:
             status = 'Standing'
             confidence = max(confidence, 0.85)
 
+        # CẢI TIẾN MỚI 1 (FIX BUG NGÃ KHÉP CHÂN):
+        # Nếu góc nghiêng cơ thể > 45 độ VÀ hông nằm ở nửa dưới màn hình (y_hip_norm > 0.50)
+        # -> Kích hoạt Fallen kể cả khi 2 chân khép sát (Aspect Ratio < 1.0)
+        is_legs_together_fall = (angle > 45.0) and (y_hip_norm > config.HIP_LOWER_SCREEN_RATIO) and not is_touching_bottom
+        if is_legs_together_fall:
+            status = 'Fallen'
+            confidence = max(confidence, 0.88)
+
         # GIẢI PHÁP 2: Kiểm tra vị trí Chân/Đầu gối so với Hông (Foot Grounding Check)
         if status == 'Fallen':
-            if l_hip_conf > 0.3 and r_hip_conf > 0.3:
-                hip_y = (l_hip[1] + r_hip[1]) / 2.0
-            elif l_hip_conf > 0.3:
-                hip_y = l_hip[1]
-            elif r_hip_conf > 0.3:
-                hip_y = r_hip[1]
-            else:
-                hip_y = None
-
             if l_ankle_conf > 0.3 and r_ankle_conf > 0.3:
                 feet_y = (l_ankle[1] + r_ankle[1]) / 2.0
             elif l_ankle_conf > 0.3:
@@ -183,14 +200,22 @@ class FallDetector:
             else:
                 feet_y = None
 
+            # Nếu chân/đầu gối vẫn nằm ở phía dưới thấp hơn hông một khoảng rõ rệt (> 18% chiều cao box)
             if hip_y is not None and feet_y is not None:
                 if (feet_y - hip_y) > 0.18 * h:
                     status = 'Standing'
                     confidence = max(confidence, 0.85)
 
-        # Cứu cánh bằng Aspect Ratio cứng khi nằm ngã thực sự
+        # Cứu cánh bằng Aspect Ratio cứng khi nằm ngã dang chân thực sự
         if aspect_ratio > 1.30 and not is_touching_bottom:
             status = 'Fallen'
             confidence = max(confidence, 0.85)
-            
-        return status, confidence
+
+        # CẢI TIẾN MỚI 2 (FIX BUG NẰM NGỦ VS NGÃ/ĐỘT QUỤY):
+        # Nếu đang ở vị trí nằm nghiêng/ngửa nhưng KHÔNG CÓ cú rơi tự do vận tốc nhanh (had_sudden_drop == False)
+        # -> Đây là nằm từ từ lên giường/sofa ngủ -> Không tính là ngã!
+        if status == 'Fallen' and not had_sudden_drop and not is_legs_together_fall:
+            status = 'Standing'  # Hoặc tư thế nằm nghỉ sinh hoạt
+            confidence = max(confidence, 0.80)
+
+        return status, confidence, y_hip_norm

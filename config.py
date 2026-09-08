@@ -9,7 +9,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
-YOLO_MODEL_PATH = os.path.join(MODELS_DIR, "yolov8n-pose.pt") if os.path.exists(os.path.join(MODELS_DIR, "yolov8n-pose.pt")) else "yolov8n-pose.pt"
+YOLO_MODEL_PATH = os.path.join(MODELS_DIR, "yolov8s-pose.pt") if os.path.exists(os.path.join(MODELS_DIR, "yolov8s-pose.pt")) else (os.path.join(MODELS_DIR, "yolov8n-pose.pt") if os.path.exists(os.path.join(MODELS_DIR, "yolov8n-pose.pt")) else "yolov8s-pose.pt")
 SVM_MODEL_PATH = os.path.join(MODELS_DIR, "fall_classifier.pkl") if os.path.exists(os.path.join(MODELS_DIR, "fall_classifier.pkl")) else "fall_classifier.pkl"
 SCALER_MODEL_PATH = os.path.join(MODELS_DIR, "scaler.pkl") if os.path.exists(os.path.join(MODELS_DIR, "scaler.pkl")) else "scaler.pkl"
 
@@ -22,7 +22,7 @@ CAMERA_SOURCE = 0
 OUTPUT_WIDTH = 1000
 OUTPUT_HEIGHT = 600
 
-# 3. Ngưỡng cài đặt AI & Chống báo sai
+# 3. Ngưỡng cài đặt AI & Chống báo sai nâng cao
 YOLO_CONF_THRESHOLD = 0.25
 YOLO_IOU_THRESHOLD = 0.35
 
@@ -30,6 +30,13 @@ YOLO_IOU_THRESHOLD = 0.35
 FALL_FRAME_THRESHOLD = 30
 MAX_LOST_FRAMES = 30
 TRACKER_MAX_DISTANCE = 180
+
+# Ngưỡng vận tốc rơi tự do đột ngột của hông (Tỷ lệ chiều cao màn hình / giây)
+# Phân biệt ngã/đột quỵ đột ngột với nằm từ từ lên giường/sofa
+SUDDEN_DROP_VELOCITY_THRESHOLD = 0.30
+
+# Ngưỡng vị trí hông ở nửa dưới màn hình (cho ngã khép chân/co quắp)
+HIP_LOWER_SCREEN_RATIO = 0.50
 
 # 4. Cấu hình Cảnh báo Telegram Bot
 TELEGRAM_ENABLED = True

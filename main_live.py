@@ -45,19 +45,29 @@ def main():
         statuses = []
         confidences = []
 
-        # 4. Phân loại bằng SVM + Bộ lọc chống báo nhầm
+        # 4. Phân loại bằng SVM + Bộ lọc chống báo nhầm nâng cao cho TẤT CẢ MỌI NGƯỜI
         for i, keypoints in enumerate(keypoints_data):
             if len(keypoints) > 0 and i < len(boxes):
                 box = boxes[i]
-                status, confidence = detector.predict_fall_status(
+                track_id = assigned_ids[i]
+                
+                # Tính tạm y_hip_norm
+                y_hip_norm_estimate = (box[1] + box[3]) / (2.0 * config.OUTPUT_HEIGHT)
+                drop_velocity, had_sudden_drop = tracker.update_hip_position(track_id, y_hip_norm_estimate)
+
+                status, confidence, actual_y_hip_norm = detector.predict_fall_status(
                     keypoints, 
                     bbox=box, 
-                    frame_height=config.OUTPUT_HEIGHT
+                    frame_height=config.OUTPUT_HEIGHT,
+                    had_sudden_drop=had_sudden_drop
                 )
+                
+                if actual_y_hip_norm is not None:
+                    tracker.update_hip_position(track_id, actual_y_hip_norm)
+
                 confidences.append(confidence)
 
-                # Cập nhật đếm trễ 30 frames
-                track_id = assigned_ids[i]
+                # Cập nhật đếm trễ 30 frames độc lập cho từng ID
                 is_fallen = (status == 'Fallen')
                 fall_count = tracker.update_fall_counter(track_id, is_fallen)
 
